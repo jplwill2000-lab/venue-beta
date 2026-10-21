@@ -1,0 +1,35 @@
+mqtt:
+  enabled: False
+
+detectors:
+  ov:
+    type: openvino
+    device: CPU
+model:
+  width: 300
+  height: 300
+  input_tensor: nhwc
+  input_pixel_format: bgr
+  path: /openvino-model/ssdlite_mobilenet_v2.xml
+  labelmap_path: /openvino-model/coco_91cl_bkgr.txt
+
+snapshots:
+  enabled: true
+  retain:
+    default: 1
+
+cameras:
+  demo_street:
+    enabled: true
+    detect:
+      enabled: true
+      fps: 5
+      width: 640
+      height: 360
+    ffmpeg:
+      inputs:
+        - path: /media/frigate/demo.mp4
+          input_args: -re -stream_loop -1 -fflags +genpts
+          roles:
+            - detect
+version: 0.18-0
