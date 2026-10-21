@@ -53,6 +53,29 @@ services:
     volumes:
       - appsmith-stacks:/appsmith-stacks
 
+
+  glue:
+    container_name: venue-glue
+    restart: unless-stopped
+    image: python:3.12-slim
+    working_dir: /app
+    volumes:
+      - ./glue:/app
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: venue
+      PGPASSWORD: venue-local-only
+      PGDATABASE: venue
+      FRIGATE_URL: http://frigate:5000
+    command: sh -c "pip install --no-cache-dir -q --no-index --find-links=/app/wheels psycopg psycopg-binary requests && python -u /app/sync.py"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    depends_on:
+      - frigate
+      - db
+
 volumes:
   db-data:
   files-data:

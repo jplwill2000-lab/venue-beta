@@ -1,3 +1,4 @@
 frigate/storage/
 frigate/config/*
 !frigate/config/config.yaml
+glue/wheels/
