@@ -1,0 +1,59 @@
+# Venue beta - step 1 platform
+# Start:  docker compose up -d
+# Stop:   docker compose down
+# Status: docker compose ps
+
+services:
+  frigate:
+    container_name: frigate
+    restart: unless-stopped
+    stop_grace_period: 30s
+    image: ghcr.io/blakeblackshear/frigate:stable
+    shm_size: "256mb"
+    volumes:
+      - ./frigate/config:/config
+      - ./frigate/storage:/media/frigate
+      - type: tmpfs
+        target: /tmp/cache
+        tmpfs:
+          size: 1000000000
+    ports:
+      - "8971:8971"   # Frigate web interface
+      - "8554:8554"   # camera streams (used in step 2)
+
+  db:
+    container_name: venue-db
+    restart: unless-stopped
+    image: postgres:17
+    environment:
+      POSTGRES_USER: venue
+      POSTGRES_PASSWORD: venue-local-only
+      POSTGRES_DB: venue
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  files:
+    container_name: venue-files
+    restart: unless-stopped
+    image: chrislusf/seaweedfs
+    command: "server -dir=/data -s3"
+    volumes:
+      - files-data:/data
+    ports:
+      - "8888:8888"   # file browser (check page)
+      - "8333:8333"   # file storage API (used later)
+
+  appsmith:
+    container_name: appsmith
+    restart: unless-stopped
+    image: index.docker.io/appsmith/appsmith-ee:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - appsmith-stacks:/appsmith-stacks
+
+volumes:
+  db-data:
+  files-data:
+  appsmith-stacks:
