@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS sightings (
   thumb text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE sightings ADD COLUMN IF NOT EXISTS thumb_b64 bytea;
 """
 
 def db():
@@ -109,9 +110,17 @@ def do_sightings(conn):
             r.raise_for_status()
             conn.execute("DELETE FROM sightings WHERE case_id=%s", (cid,))
             for c in r.json().get("candidates", []):
+                tb = None
+                if c.get("thumb"):
+                    try:
+                        tr = requests.get(f"{FILES}/{c['thumb']}", timeout=15)
+                        if tr.status_code == 200:
+                            tb = tr.content
+                    except Exception:
+                        pass
                 conn.execute(
-                    "INSERT INTO sightings (case_id, event_id, camera, started_at, similarity, thumb) VALUES (%s,%s,%s,to_timestamp(%s),%s,%s)",
-                    (cid, c["event_id"], c.get("camera"), c.get("start_time"), c.get("similarity"), c.get("thumb")))
+                    "INSERT INTO sightings (case_id, event_id, camera, started_at, similarity, thumb, thumb_b64) VALUES (%s,%s,%s,to_timestamp(%s),%s,%s,%s)",
+                    (cid, c["event_id"], c.get("camera"), c.get("start_time"), c.get("similarity"), c.get("thumb"), tb))
             conn.execute("UPDATE sighting_requests SET done=true WHERE id=%s", (rid,))
             print(f"sightings for case {cid}: {len(r.json().get('candidates', []))} stored", flush=True)
         except Exception as e:
