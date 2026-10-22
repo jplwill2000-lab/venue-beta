@@ -38,10 +38,28 @@ def embed(img_bytes):
         feat = model(transform(img).unsqueeze(0))
     return feat[0]
 
-def get_crop(eid):
+def get_frame(eid, boxed=False):
+    params = {"quality": 85}
+    if boxed:
+        params["bbox"] = 1
     r = requests.get(f"{FRIGATE}/api/events/{eid}/snapshot.jpg",
-                     params={"crop": 1, "quality": 80}, timeout=15)
+                     params=params, timeout=15)
     return r.content if r.status_code == 200 and r.content else None
+
+def crop_to_box(img_bytes, box, margin=0.15):
+    """box: normalized [x, y, w, h]. Returns cropped image bytes (JPEG)."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    W, H = img.size
+    x, y, w, h = box
+    mx, my = w * margin, h * margin
+    left = max(0, int((x - mx) * W)); top = max(0, int((y - my) * H))
+    right = min(W, int((x + w + mx) * W)); bottom = min(H, int((y + h + my) * H))
+    if right - left < 10 or bottom - top < 10:
+        return img_bytes
+    out = io.BytesIO()
+    img.crop((left, top, right, bottom)).save(out, "JPEG", quality=85)
+    return out.getvalue()
 
 def put_thumb(eid, data):
     try:
@@ -62,9 +80,11 @@ def sightings():
     t0 = time.time()
     ev = requests.get(f"{FRIGATE}/api/events/{eid}", timeout=10).json()
     start = ev.get("start_time") or time.time()
-    seed_crop = get_crop(eid)
-    if not seed_crop:
+    box = (ev.get("data") or {}).get("box")
+    seed_frame = get_frame(eid)
+    if not seed_frame:
         return jsonify({"error": "no snapshot for seed event"}), 404
+    seed_crop = crop_to_box(seed_frame, box) if box else seed_frame
     seed_feat = embed(seed_crop)
     r = requests.get(f"{FRIGATE}/api/events", params={
         "after": int(start - window), "before": int(start + window),
@@ -75,11 +95,13 @@ def sightings():
         cid = e["id"]
         if cid == eid:
             continue
-        crop = get_crop(cid)
-        if not crop:
+        frame = get_frame(cid)
+        if not frame:
             continue
+        cbox = (e.get("data") or {}).get("box")
+        crop = crop_to_box(frame, cbox) if cbox else frame
         sim = float(torch.nn.functional.cosine_similarity(seed_feat, embed(crop), dim=0))
-        thumb = put_thumb(cid, crop)
+        thumb = put_thumb(cid, get_frame(cid, boxed=True) or frame)
         out.append({
             "event_id": cid,
             "camera": e.get("camera"),

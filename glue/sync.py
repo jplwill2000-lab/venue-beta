@@ -19,6 +19,24 @@ CREATE TABLE IF NOT EXISTS cases (
 );
 ALTER TABLE cases ADD COLUMN IF NOT EXISTS evidence_url text;
 ALTER TABLE cases ADD COLUMN IF NOT EXISTS exported_at timestamptz;
+ALTER TABLE cases ADD COLUMN IF NOT EXISTS evidence_zip bytea;
+CREATE TABLE IF NOT EXISTS sighting_requests (
+  id bigserial PRIMARY KEY,
+  case_id bigint NOT NULL,
+  frigate_event_id text NOT NULL,
+  done boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS sightings (
+  id bigserial PRIMARY KEY,
+  case_id bigint NOT NULL,
+  event_id text NOT NULL,
+  camera text,
+  started_at timestamptz,
+  similarity numeric,
+  thumb text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 """
 
 def db():
@@ -69,14 +87,36 @@ def do_exports(conn):
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
                 for name, data in parts:
                     z.writestr(name, data)
-            put_file(f"{base}/evidence.zip", buf.getvalue(), "application/zip")
+            zip_bytes = buf.getvalue()
+            put_file(f"{base}/evidence.zip", zip_bytes, "application/zip")
             conn.execute(
-                "UPDATE cases SET status='exported', evidence_url=%s, exported_at=now() WHERE id=%s",
-                (f"{base}/evidence.zip", cid))
+                "UPDATE cases SET status='exported', evidence_url=%s, evidence_zip=%s, exported_at=now() WHERE id=%s",
+                (f"{base}/evidence.zip", zip_bytes, cid))
             print(f"exported case {cid} -> {base}/evidence.zip", flush=True)
         except Exception as e:
             conn.execute("UPDATE cases SET status='export_failed' WHERE id=%s", (cid,))
             print(f"export FAILED case {cid}: {e}", flush=True)
+
+REID = os.environ.get("REID_URL", "http://reid:8090")
+
+def do_sightings(conn):
+    rows = conn.execute(
+        "SELECT id, case_id, frigate_event_id FROM sighting_requests WHERE NOT done ORDER BY id LIMIT 3"
+    ).fetchall()
+    for rid, cid, eid in rows:
+        try:
+            r = requests.get(f"{REID}/sightings", params={"event_id": eid, "window": 15}, timeout=180)
+            r.raise_for_status()
+            conn.execute("DELETE FROM sightings WHERE case_id=%s", (cid,))
+            for c in r.json().get("candidates", []):
+                conn.execute(
+                    "INSERT INTO sightings (case_id, event_id, camera, started_at, similarity, thumb) VALUES (%s,%s,%s,to_timestamp(%s),%s,%s)",
+                    (cid, c["event_id"], c.get("camera"), c.get("start_time"), c.get("similarity"), c.get("thumb")))
+            conn.execute("UPDATE sighting_requests SET done=true WHERE id=%s", (rid,))
+            print(f"sightings for case {cid}: {len(r.json().get('candidates', []))} stored", flush=True)
+        except Exception as e:
+            conn.execute("UPDATE sighting_requests SET done=true WHERE id=%s", (rid,))
+            print(f"sightings FAILED case {cid}: {e}", flush=True)
 
 def main():
     while True:
@@ -107,6 +147,7 @@ def main():
                 if new:
                     print(f"inserted {new} new case(s)", flush=True)
                 do_exports(conn)
+                do_sightings(conn)
         except Exception as e:
             print(f"poll error: {e}", flush=True)
         time.sleep(POLL_SECONDS)
