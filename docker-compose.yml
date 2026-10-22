@@ -94,6 +94,14 @@ services:
       - frigate
       - files
 
+  netfix:
+    container_name: venue-netfix
+    image: alpine:3.20
+    network_mode: host
+    privileged: true
+    restart: always
+    command: sh -c "while true; do sysctl -w net.bridge.bridge-nf-call-iptables=0; sleep 20; done"
+
 volumes:
   db-data:
   files-data:
