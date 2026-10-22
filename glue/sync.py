@@ -1,5 +1,5 @@
 """Venue beta glue: poll Frigate events -> cases; export evidence packs to SeaweedFS on request."""
-import os, time, requests, psycopg
+import os, time, io, zipfile, requests, psycopg
 
 FRIGATE = os.environ.get("FRIGATE_URL", "http://frigate:5000")
 FILES = os.environ.get("FILES_URL", "http://files:8888")
@@ -34,24 +34,46 @@ def put_file(path, data, ctype):
 
 def do_exports(conn):
     rows = conn.execute(
-        "SELECT id, frigate_event_id FROM cases WHERE status='export_requested' ORDER BY id LIMIT 5"
+        "SELECT id, frigate_event_id, camera, label, score, started_at FROM cases WHERE status='export_requested' ORDER BY id LIMIT 5"
     ).fetchall()
-    for cid, eid in rows:
+    for cid, eid, camera, label, score, started_at in rows:
         base = f"evidence/{eid}"
         try:
             meta = requests.get(f"{FRIGATE}/api/events/{eid}", timeout=10)
             meta.raise_for_status()
             put_file(f"{base}/metadata.json", meta.content, "application/json")
+            parts = [("metadata.json", meta.content)]
             snap = requests.get(f"{FRIGATE}/api/events/{eid}/snapshot.jpg", timeout=15)
             if snap.status_code == 200 and snap.content:
                 put_file(f"{base}/snapshot.jpg", snap.content, "image/jpeg")
+                parts.append(("snapshot.jpg", snap.content))
             clip = requests.get(f"{FRIGATE}/api/events/{eid}/clip.mp4", timeout=30)
             if clip.status_code == 200 and clip.content:
                 put_file(f"{base}/clip.mp4", clip.content, "video/mp4")
+                parts.append(("clip.mp4", clip.content))
+            summary = (
+                f"Venue evidence pack\n"
+                f"Case ID: {cid}\n"
+                f"Frigate event: {eid}\n"
+                f"Camera: {camera}\n"
+                f"Detected: {label}\n"
+                f"Confidence: {score}\n"
+                f"Started at: {started_at}\n"
+                f"Exported at: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}\n"
+                f"\nFiles: metadata.json (raw detection data), snapshot.jpg (still image)"
+                + (", clip.mp4 (video clip)" if any(n == 'clip.mp4' for n, _ in parts) else " (no clip - recording disabled on demo camera)")
+                + "\n"
+            )
+            parts.append(("case.txt", summary.encode()))
+            buf = io.BytesIO()
+            with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+                for name, data in parts:
+                    z.writestr(name, data)
+            put_file(f"{base}/evidence.zip", buf.getvalue(), "application/zip")
             conn.execute(
                 "UPDATE cases SET status='exported', evidence_url=%s, exported_at=now() WHERE id=%s",
-                (base, cid))
-            print(f"exported case {cid} -> {base}", flush=True)
+                (f"{base}/evidence.zip", cid))
+            print(f"exported case {cid} -> {base}/evidence.zip", flush=True)
         except Exception as e:
             conn.execute("UPDATE cases SET status='export_failed' WHERE id=%s", (cid,))
             print(f"export FAILED case {cid}: {e}", flush=True)
