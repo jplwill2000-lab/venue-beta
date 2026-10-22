@@ -86,7 +86,7 @@ services:
     environment:
       FRIGATE_URL: http://frigate:5000
       FILES_URL: http://files:8888
-    command: sh -c "pip install --no-cache-dir -q --no-index --find-links=/app/wheels torch torchvision flask requests pillow numpy scipy yacs opencv-python-headless scikit-learn gdown six && pip install --no-cache-dir -q --no-index --find-links=/app/wheels --no-deps torchreid && python -u /app/reid.py"
+    command: sh -c "pip install --no-cache-dir -q --no-index --find-links=/app/wheels torch torchvision torchreid flask requests pillow numpy scipy yacs opencv-python-headless scikit-learn gdown six tensorboard tabulate future && python -u /app/reid.py"
     dns:
       - 1.1.1.1
       - 8.8.8.8
