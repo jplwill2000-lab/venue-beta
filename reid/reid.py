@@ -42,6 +42,9 @@ def get_frame(eid, boxed=False):
     params = {"quality": 85}
     if boxed:
         params["bbox"] = 1
+    else:
+        params["bbox"] = 0
+        params["timestamp"] = 0
     r = requests.get(f"{FRIGATE}/api/events/{eid}/snapshot.jpg",
                      params=params, timeout=15)
     return r.content if r.status_code == 200 and r.content else None
@@ -59,6 +62,24 @@ def crop_to_box(img_bytes, box, margin=0.15):
         return img_bytes
     out = io.BytesIO()
     img.crop((left, top, right, bottom)).save(out, "JPEG", quality=85)
+    return out.getvalue()
+
+def make_crop(img_bytes, box, margin=0.5, min_h=480):
+    """Padded person crop, upscaled so a small distant person is easier to see."""
+    from PIL import Image
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    W, H = img.size
+    x, y, w, h = box
+    left = max(0, int((x - w * margin) * W)); top = max(0, int((y - h * margin) * H))
+    right = min(W, int((x + w + w * margin) * W)); bottom = min(H, int((y + h + h * margin) * H))
+    if right - left < 10 or bottom - top < 10:
+        return None
+    c = img.crop((left, top, right, bottom))
+    if c.height < min_h:
+        s = min_h / c.height
+        c = c.resize((int(c.width * s), min_h), Image.LANCZOS)
+    out = io.BytesIO()
+    c.save(out, "JPEG", quality=90)
     return out.getvalue()
 
 def put_thumb(eid, data):
@@ -102,12 +123,15 @@ def sightings():
         crop = crop_to_box(frame, cbox) if cbox else frame
         sim = float(torch.nn.functional.cosine_similarity(seed_feat, embed(crop), dim=0))
         thumb = put_thumb(cid, get_frame(cid, boxed=True) or frame)
+        cropb = make_crop(frame, cbox) if cbox else None
+        crop_thumb = put_thumb(f"{cid}_crop", cropb) if cropb else None
         out.append({
             "event_id": cid,
             "camera": e.get("camera"),
             "start_time": e.get("start_time"),
             "similarity": round(sim, 4),
             "thumb": thumb,
+            "crop": crop_thumb,
         })
     out.sort(key=lambda x: -x["similarity"])
     print(f"sightings for {eid}: {len(out)} candidates in {time.time()-t0:.1f}s", flush=True)

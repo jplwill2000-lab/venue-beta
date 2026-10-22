@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS sightings (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE sightings ADD COLUMN IF NOT EXISTS thumb_b64 bytea;
+ALTER TABLE sightings ADD COLUMN IF NOT EXISTS crop_b64 bytea;
+ALTER TABLE sightings ADD COLUMN IF NOT EXISTS evidence_zip bytea;
 """
 
 def db():
@@ -98,6 +100,38 @@ def do_exports(conn):
             conn.execute("UPDATE cases SET status='export_failed' WHERE id=%s", (cid,))
             print(f"export FAILED case {cid}: {e}", flush=True)
 
+def build_sighting_pack(case_id, c, full_img, crop_img):
+    """Evidence pack for one possible sighting: full frame, person crop, clip if recorded, summary."""
+    eid = c["event_id"]
+    parts = []
+    if full_img:
+        parts.append(("snapshot.jpg", full_img))
+    if crop_img:
+        parts.append(("person-crop.jpg", crop_img))
+    clip = False
+    try:
+        cr = requests.get(f"{FRIGATE}/api/events/{eid}/clip.mp4", timeout=30)
+        if cr.status_code == 200 and cr.content:
+            parts.append(("clip.mp4", cr.content)); clip = True
+    except Exception:
+        pass
+    summary = (
+        "Possible sighting evidence pack\n"
+        f"Found while searching around case {case_id}\n"
+        f"Frigate event: {eid}\n"
+        f"Camera: {c.get('camera')}\n"
+        f"Time (unix): {c.get('start_time')}\n"
+        f"Appearance similarity: {c.get('similarity')} (how alike the clothing and build look; not an identification)\n"
+        "No face recognition is used. A person must review the images.\n"
+        + ("Includes clip.mp4.\n" if clip else "No video clip for this moment (recording was not on when it happened).\n")
+    )
+    parts.append(("case.txt", summary.encode()))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in parts:
+            z.writestr(name, data)
+    return buf.getvalue()
+
 REID = os.environ.get("REID_URL", "http://reid:8090")
 
 def do_sightings(conn):
@@ -118,9 +152,18 @@ def do_sightings(conn):
                             tb = tr.content
                     except Exception:
                         pass
+                cb = None
+                if c.get("crop"):
+                    try:
+                        cr = requests.get(f"{FILES}/{c['crop']}", timeout=15)
+                        if cr.status_code == 200:
+                            cb = cr.content
+                    except Exception:
+                        pass
+                pack = build_sighting_pack(cid, c, tb, cb)
                 conn.execute(
-                    "INSERT INTO sightings (case_id, event_id, camera, started_at, similarity, thumb, thumb_b64) VALUES (%s,%s,%s,to_timestamp(%s),%s,%s,%s)",
-                    (cid, c["event_id"], c.get("camera"), c.get("start_time"), c.get("similarity"), c.get("thumb"), tb))
+                    "INSERT INTO sightings (case_id, event_id, camera, started_at, similarity, thumb, thumb_b64, crop_b64, evidence_zip) VALUES (%s,%s,%s,to_timestamp(%s),%s,%s,%s,%s,%s)",
+                    (cid, c["event_id"], c.get("camera"), c.get("start_time"), c.get("similarity"), c.get("thumb"), tb, cb, pack))
             conn.execute("UPDATE sighting_requests SET done=true WHERE id=%s", (rid,))
             print(f"sightings for case {cid}: {len(r.json().get('candidates', []))} stored", flush=True)
         except Exception as e:

@@ -4,3 +4,4 @@ frigate/config/*
 glue/wheels/
 reid/wheels/
 reid/weights/
+__pycache__/

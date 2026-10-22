@@ -24,12 +24,27 @@ cameras:
     detect:
       enabled: true
       fps: 5
-      width: 640
-      height: 360
+      width: 1280
+      height: 720
     ffmpeg:
       inputs:
         - path: /media/frigate/demo.mp4
           input_args: -re -stream_loop -1 -fflags +genpts
           roles:
             - detect
+            - record
 version: 0.18-0
+record:
+  enabled: true
+  continuous:
+    days: 0
+  motion:
+    days: 0
+  alerts:
+    retain:
+      days: 1
+      mode: all
+  detections:
+    retain:
+      days: 1
+      mode: all
